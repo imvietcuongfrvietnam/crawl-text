@@ -15,9 +15,11 @@ from webdriver_manager.chrome import ChromeDriverManager
 # ==========================================
 INPUT_FILE = 'raw.xlsx'
 DATA_FOLDER = os.path.join(os.getcwd(), 'data')
+ALL_FILES_FOLDER = os.path.join(os.getcwd(), 'all_file')
 
-if not os.path.exists(DATA_FOLDER):
-    os.makedirs(DATA_FOLDER)
+for _folder in (DATA_FOLDER, ALL_FILES_FOLDER):
+    if not os.path.exists(_folder):
+        os.makedirs(_folder)
 
 # ==========================================
 # CẤU HÌNH CHROME
@@ -49,16 +51,45 @@ def extract_pdf_text(pdf_path):
 
 
 def wait_for_download(folder, before_files, timeout=60):
-    """Đợi file tải xong và trả về tên file mới. None nếu timeout."""
+    """Đợi 1 file tải xong, trả về tên file mới. None nếu timeout."""
     for _ in range(timeout):
         time.sleep(1)
         after_files = set(os.listdir(folder))
         new_files = list(after_files - before_files)
-        # Bỏ qua file .crdownload (đang tải dở)
         completed = [f for f in new_files if not f.endswith('.crdownload')]
         if completed:
             return completed[0]
     return None
+
+
+def wait_for_all_downloads(folder, before_files, timeout=90, stable_secs=4):
+    """Đợi tất cả file tải xong (không còn .crdownload và ổn định).
+
+    Trả về danh sách tên file mới tải về. [] nếu timeout.
+    """
+    stable_count = 0
+    last_completed = set()
+
+    for _ in range(timeout):
+        time.sleep(1)
+        after_files = set(os.listdir(folder))
+        new_files = after_files - before_files
+        in_progress = {f for f in new_files if f.endswith('.crdownload')}
+        completed = new_files - in_progress
+
+        if completed and not in_progress:
+            if completed == last_completed:
+                stable_count += 1
+            else:
+                stable_count = 0
+                last_completed = completed
+            if stable_count >= stable_secs:
+                return list(completed)
+        else:
+            stable_count = 0
+            last_completed = completed
+
+    return list(last_completed) if last_completed else []
 
 
 # ==========================================
@@ -115,9 +146,43 @@ def main_process():
             time.sleep(2)
 
             # ----------------------------------------------------------
-            # BƯỚC 2: Click "Biểu mẫu mời thầu" (dòng 1.5)
-            # Ưu tiên tìm trong hàng có STT "1.5" để tránh nhầm với
-            # header section khác.
+            # BƯỚC 2: Click "Tải tất cả file đính kèm" → lưu vào all_file/{ma_tbmt}/
+            # ----------------------------------------------------------
+            pkg_folder = os.path.join(ALL_FILES_FOLDER, ma_tbmt)
+            os.makedirs(pkg_folder, exist_ok=True)
+
+            try:
+                tai_tat_ca_xpath = (
+                    "//button[normalize-space(.)='Tải tất cả file đính kèm']"
+                    " | //a[normalize-space(.)='Tải tất cả file đính kèm']"
+                    " | //span[normalize-space(text())='Tải tất cả file đính kèm']/.."
+                    " | //*[normalize-space(text())='Tải tất cả file đính kèm'"
+                    " and not(descendant::*[normalize-space(text())='Tải tất cả file đính kèm'])]"
+                )
+                btn_tai_tat_ca = wait.until(EC.element_to_be_clickable((By.XPATH, tai_tat_ca_xpath)))
+                driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", btn_tai_tat_ca)
+                time.sleep(0.5)
+
+                before_all = set(os.listdir(DATA_FOLDER))
+                driver.execute_script("arguments[0].click();", btn_tai_tat_ca)
+                print("   -> Đang tải tất cả file đính kèm...")
+
+                all_new = wait_for_all_downloads(DATA_FOLDER, before_all, timeout=120)
+                if all_new:
+                    for fname in all_new:
+                        src = os.path.join(DATA_FOLDER, fname)
+                        dst = os.path.join(pkg_folder, fname)
+                        if os.path.exists(dst):
+                            os.remove(dst)
+                        os.rename(src, dst)
+                    print(f"   -> Đã lưu {len(all_new)} file vào all_file/{ma_tbmt}/")
+                else:
+                    print("   -> Không tải được file đính kèm (timeout hoặc không có file).")
+            except Exception as e_tai:
+                print(f"   -> Bỏ qua 'Tải tất cả': {str(e_tai).split(chr(10))[0]}")
+
+            # ----------------------------------------------------------
+            # BƯỚC 3: Click "Biểu mẫu mời thầu" (dòng 1.5)
             # ----------------------------------------------------------
             # Thử tìm trong table row chứa "1.5" trước
             bmmtt_xpath = (
@@ -144,7 +209,7 @@ def main_process():
             driver.execute_script("arguments[0].click();", bmmtt)
 
             # ----------------------------------------------------------
-            # BƯỚC 3: Đợi tab/cửa sổ mới mở ra (viewer)
+            # BƯỚC 4: Đợi tab/cửa sổ mới mở ra (viewer)
             # Trang viewer mở ở tab mới → phải switch sang tab đó
             # ----------------------------------------------------------
             time.sleep(3)
@@ -157,7 +222,7 @@ def main_process():
                 print("   -> Viewer mở trong cùng tab.")
 
             # ----------------------------------------------------------
-            # BƯỚC 4: Click nút "Tải về" trong viewer
+            # BƯỚC 5: Click nút "Tải về" trong viewer
             # ----------------------------------------------------------
             before_files = set(os.listdir(DATA_FOLDER))
 
@@ -175,7 +240,7 @@ def main_process():
             driver.execute_script("arguments[0].click();", btn_download)
 
             # ----------------------------------------------------------
-            # BƯỚC 5: Đợi file tải xong, đổi tên, bóc tách PDF
+            # BƯỚC 6: Đợi file tải xong, đổi tên, bóc tách PDF
             # ----------------------------------------------------------
             print("   -> Đang đợi tải file...")
             downloaded_file = wait_for_download(DATA_FOLDER, before_files, timeout=60)
