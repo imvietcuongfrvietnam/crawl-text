@@ -169,7 +169,7 @@ def download_from_viewer(driver, wait, main_window, pkg_folder, dest_name):
         btn = wait.until(EC.element_to_be_clickable((By.XPATH, BTN_TAI_VE_XPATH)))
         js_click(driver, btn)
         print("      · Đã click Tải về, đang đợi file...")
-        fname = wait_for_download(timeout=90)
+        fname = wait_for_download(timeout=15)
         if fname:
             path = move_to_pkg(fname, pkg_folder, dest_name)
             print(f"      · Lưu: {os.path.basename(path)}")
@@ -300,7 +300,7 @@ def main_process():
                 # Dùng normalize-space(.) thay vì text() để khớp kể cả
                 # khi STT nằm trong thẻ con <span> bên trong <td>
                 row_xpath = "//tr[td[normalize-space(.)='2.1']]"
-                row_el = WebDriverWait(driver, 10).until(
+                row_el = WebDriverWait(driver, 15).until(
                     EC.presence_of_element_located((By.XPATH, row_xpath))
                 )
 
@@ -354,16 +354,16 @@ def main_process():
                     try:
                         clear_temp()            # xoá temp trước khi click
                         js_click(driver, chip)
-                        time.sleep(1.5)         # đợi để biết có mở tab mới không
+                        # Đợi tối đa 5s để phát hiện tab viewer mới mở
+                        new_tab_opened = switch_to_new_tab(driver, main_window, timeout=5)
 
-                        if len(driver.window_handles) > 1:
-                            switch_to_new_tab(driver, main_window)
+                        if new_tab_opened:
                             download_from_viewer(
                                 driver, wait, main_window, pkg_folder, dest_name
                             )
                         else:
-                            # Download trực tiếp (không qua viewer)
-                            fname = wait_for_download(timeout=3)
+                            # Direct download — kiểm tra file đã bắt đầu tải chưa
+                            fname = wait_for_download(timeout=15)
                             if fname:
                                 path = move_to_pkg(fname, pkg_folder, dest_name)
                                 print(f"      · Lưu: {os.path.basename(path)}")
