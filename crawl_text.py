@@ -292,52 +292,48 @@ def main_process():
             content_list.append(extracted)
 
             # -------------------------------------------------------
-            # BƯỚC 4: Tải tài liệu Yêu cầu kỹ thuật (row 2.1)
-            # Row 2.1 có thể có nhiều file với nhiều định dạng khác nhau
-            # (pdf, docx, xlsx, ...) → tải tất cả
+            # BƯỚC 4: Tải file từ các hàng Yêu cầu kỹ thuật / Chỉ dẫn kỹ thuật
+            # Tìm theo tên chương thay vì số thứ tự cố định (2.1)
+            # vì STT có thể khác nhau tuỳ gói thầu
             # -------------------------------------------------------
             try:
-                # Dùng normalize-space(.) thay vì text() để khớp kể cả
-                # khi STT nằm trong thẻ con <span> bên trong <td>
-                row_xpath = "//tr[td[normalize-space(.)='2.1']]"
-                row_el = WebDriverWait(driver, 15).until(
-                    EC.presence_of_element_located((By.XPATH, row_xpath))
-                )
-
-                # Lấy tất cả phần tử con có thể click được (a, span, button)
-                candidates = row_el.find_elements(By.XPATH, ".//a | .//span | .//button")
+                # Khớp bất kỳ hàng nào có chứa "kỹ thuật" trong cột tên chương
+                KT_KEYWORDS = ['yêu cầu về kỹ thuật', 'yêu cầu kỹ thuật', 'chỉ dẫn kỹ thuật']
+                kt_rows = driver.find_elements(By.XPATH, "//tr")
+                target_rows = []
+                for r in kt_rows:
+                    row_text = driver.execute_script(
+                        "return (arguments[0].textContent || '').toLowerCase();", r
+                    )
+                    if any(kw in row_text for kw in KT_KEYWORDS):
+                        target_rows.append(r)
 
                 FILE_EXTS = (
                     '.pdf', '.doc', '.docx', '.xls', '.xlsx',
                     '.zip', '.rar', '.ppt', '.pptx', '.txt', '.odt',
                 )
 
-                # Dùng JS textContent thay vì .text — .text của Selenium
-                # trả về rỗng với chip/badge được render bằng CSS
                 def get_text(el):
                     return driver.execute_script(
                         "return (arguments[0].textContent || '').trim().toLowerCase();", el
                     )
 
-                all_matched = [
-                    el for el in candidates
-                    if any(get_text(el).endswith(ext) for ext in FILE_EXTS)
-                    or any(ext in get_text(el) for ext in FILE_EXTS)
-                ]
-
-                # Dedup theo text: XPath trả về theo document order (cha trước con),
-                # nên giữ phần tử đầu tiên của mỗi tên file là tự động giữ phần tử
-                # ngoài cùng — bỏ qua <span> con bên trong <a> cùng tên.
+                # Gom tất cả chip file từ các hàng phù hợp, dedup theo tên
                 seen_text = set()
                 chips = []
-                for el in all_matched:
-                    txt = get_text(el)
-                    if txt not in seen_text:
-                        seen_text.add(txt)
-                        chips.append(el)
+                for row_el in target_rows:
+                    candidates = row_el.find_elements(By.XPATH, ".//a | .//span | .//button")
+                    for el in candidates:
+                        txt = get_text(el)
+                        if txt in seen_text:
+                            continue
+                        if any(txt.endswith(ext) for ext in FILE_EXTS) or \
+                           any(ext in txt for ext in FILE_EXTS):
+                            seen_text.add(txt)
+                            chips.append(el)
 
                 if not chips:
-                    print("   -> Không tìm thấy file đính kèm trong row 2.1.")
+                    print("   -> Không tìm thấy file KT.")
                 else:
                     names = [driver.execute_script(
                         "return (arguments[0].textContent || '').trim();", c
@@ -352,13 +348,12 @@ def main_process():
                     )
                     print(f"   -> [{i+1}/{len(chips)}] Tải: {chip_name}")
                     try:
-                        clear_temp()            # xoá temp trước khi click
+                        clear_temp()
                         js_click(driver, chip)
 
-                        # Kiểm tra đồng thời tab mới và file tải về —
-                        # cái nào xuất hiện trước thì xử lý, không chờ cố định
+                        # Poll mỗi 0.5s, tối đa 5s
                         handled = False
-                        for _ in range(30):          # poll mỗi 0.5s, tối đa 15s
+                        for _ in range(10):
                             time.sleep(0.5)
                             if len(driver.window_handles) > 1:
                                 switch_to_new_tab(driver, main_window)
