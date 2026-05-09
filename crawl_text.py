@@ -296,27 +296,39 @@ def main_process():
                 # Lấy tất cả phần tử con có thể click được (a, span, button)
                 candidates = row_el.find_elements(By.XPATH, ".//a | .//span | .//button")
 
-                # Lọc bằng Python: chỉ giữ những phần tử có text trông như tên file
                 FILE_EXTS = (
                     '.pdf', '.doc', '.docx', '.xls', '.xlsx',
                     '.zip', '.rar', '.ppt', '.pptx', '.txt', '.odt',
                 )
+
+                # Dùng JS textContent thay vì .text — .text của Selenium
+                # trả về rỗng với chip/badge được render bằng CSS
+                def get_text(el):
+                    return driver.execute_script(
+                        "return (arguments[0].textContent || '').trim().toLowerCase();", el
+                    )
+
                 chips = [
                     el for el in candidates
-                    if any(el.text.strip().lower().endswith(ext) for ext in FILE_EXTS)
-                    or any(ext in el.text.strip().lower() for ext in FILE_EXTS)
+                    if any(get_text(el).endswith(ext) for ext in FILE_EXTS)
+                    or any(ext in get_text(el) for ext in FILE_EXTS)
                 ]
 
                 if not chips:
                     print("   -> Không tìm thấy file đính kèm trong row 2.1.")
                 else:
-                    names = [c.text.strip() for c in chips]
+                    names = [driver.execute_script(
+                        "return (arguments[0].textContent || '').trim();", c
+                    ) for c in chips]
                     print(f"   -> Tìm thấy {len(chips)} file KT: {names}")
 
                 for i, chip in enumerate(chips):
                     suffix = f"_{i + 1}" if len(chips) > 1 else ""
                     dest_name = f"yeu_cau_ky_thuat{suffix}"
-                    print(f"   -> [{i+1}/{len(chips)}] Tải: {chip.text.strip()}")
+                    chip_name = driver.execute_script(
+                        "return (arguments[0].textContent || '').trim();", chip
+                    )
+                    print(f"   -> [{i+1}/{len(chips)}] Tải: {chip_name}")
                     try:
                         clear_temp()            # xoá temp trước khi click
                         js_click(driver, chip)
