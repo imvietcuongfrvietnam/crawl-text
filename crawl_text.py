@@ -363,7 +363,7 @@ def main_process():
                             )
                         else:
                             # Download trực tiếp (không qua viewer)
-                            fname = wait_for_download(timeout=90)
+                            fname = wait_for_download(timeout=3)
                             if fname:
                                 path = move_to_pkg(fname, pkg_folder, dest_name)
                                 print(f"      · Lưu: {os.path.basename(path)}")
