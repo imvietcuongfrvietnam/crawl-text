@@ -30,12 +30,23 @@ for _d in (BASE_DATA, TEMP_DL):
 def make_chrome_options():
     opt = Options()
     # opt.add_argument('--headless')  # bỏ comment để chạy ngầm
+
+    # Tắt popup "Save As" và tự động tải về TEMP_DL
     opt.add_experimental_option("prefs", {
         "download.default_directory": TEMP_DL,
         "download.prompt_for_download": False,
         "download.directory_upgrade": True,
         "plugins.always_open_pdf_externally": True,
+        # Cho phép tải nhiều file tự động (không hỏi)
+        "profile.default_content_setting_values.automatic_downloads": 1,
+        # Tắt cảnh báo file nguy hiểm
+        "safebrowsing.enabled": False,
+        "safebrowsing.disable_download_protection": True,
     })
+    # Tắt download bubble / confirmation bar ở Chrome mới
+    opt.add_argument("--disable-features=DownloadBubble,DownloadBubbleV2")
+    opt.add_argument("--no-first-run")
+    opt.add_argument("--no-default-browser-check")
     return opt
 
 def make_driver():
@@ -308,11 +319,22 @@ def main_process():
                         "return (arguments[0].textContent || '').trim().toLowerCase();", el
                     )
 
-                chips = [
+                all_matched = [
                     el for el in candidates
                     if any(get_text(el).endswith(ext) for ext in FILE_EXTS)
                     or any(ext in get_text(el) for ext in FILE_EXTS)
                 ]
+
+                # Dedup theo text: XPath trả về theo document order (cha trước con),
+                # nên giữ phần tử đầu tiên của mỗi tên file là tự động giữ phần tử
+                # ngoài cùng — bỏ qua <span> con bên trong <a> cùng tên.
+                seen_text = set()
+                chips = []
+                for el in all_matched:
+                    txt = get_text(el)
+                    if txt not in seen_text:
+                        seen_text.add(txt)
+                        chips.append(el)
 
                 if not chips:
                     print("   -> Không tìm thấy file đính kèm trong row 2.1.")
