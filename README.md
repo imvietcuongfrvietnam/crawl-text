@@ -1,5 +1,9 @@
 # crawl-text — Tải hồ sơ mời thầu từ muasamcong.mpi.gov.vn
 
+> **Hai chế độ:**
+> - `agent.py` — AI agent (Claude claude-opus-4-7 + tool use): tự đọc hiểu HTML, không cần XPath cứng
+> - `crawl_text.py` — Script truyền thống: XPath hardcode, không cần API key
+
 Script tự động:
 1. Vào từng link gói thầu trong file Excel
 2. Tải **Biểu mẫu mời thầu** (row 1.5) từ tab viewer
@@ -74,6 +78,16 @@ File `raw.xlsx` phải có ít nhất 2 cột:
 ---
 
 ### Bước 6 — Chạy script
+
+**Chế độ AI agent (khuyến nghị — tự đọc hiểu trang, không cần XPath cứng):**
+
+```bash
+# Cần có ANTHROPIC_API_KEY
+export ANTHROPIC_API_KEY=sk-ant-...
+python agent.py
+```
+
+**Chế độ script truyền thống:**
 
 ```bash
 python crawl_text.py
