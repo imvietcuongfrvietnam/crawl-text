@@ -16,7 +16,8 @@ from webdriver_manager.chrome import ChromeDriverManager
 # ==========================================
 # CẤU HÌNH CƠ BẢN
 # ==========================================
-INPUT_FILE = 'raw.xlsx'
+INPUT_FILE  = 'raw.xlsx'
+INPUT_SHEET = '1. Raw data'  # Tên sheet chứa dữ liệu đầy đủ (None = sheet đầu tiên)
 BASE_DATA  = os.path.join(os.getcwd(), 'data')    # data/{ma_tbmt}/
 TEMP_DL    = os.path.join(os.getcwd(), '_temp_dl') # thư mục tải tạm
 
@@ -179,7 +180,7 @@ def download_from_viewer(driver, wait, main_window, pkg_folder, dest_name):
 def main_process():
     print(f"Đang đọc file: {INPUT_FILE}...")
     try:
-        df = pd.read_excel(INPUT_FILE)
+        df = pd.read_excel(INPUT_FILE, sheet_name=INPUT_SHEET)
     except Exception as e:
         print(f"Lỗi đọc file: {e}")
         return
