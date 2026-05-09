@@ -292,56 +292,99 @@ def main_process():
             content_list.append(extracted)
 
             # -------------------------------------------------------
-            # BƯỚC 4: Tải file từ các hàng Yêu cầu kỹ thuật / Chỉ dẫn kỹ thuật
-            # Tìm theo tên chương thay vì số thứ tự cố định (2.1)
-            # vì STT có thể khác nhau tuỳ gói thầu
+            # BƯỚC 4: Tải file từ Chương V — xử lý 2 trường hợp:
+            #   A) Chương V chỉ có 1 hàng (không có đề mục con)
+            #      → tải toàn bộ file của hàng đó
+            #   B) Chương V có nhiều đề mục con (2.1.1, 2.1.2, ...)
+            #      → chỉ tải từ hàng có "Yêu cầu kỹ thuật" / "Chỉ dẫn kỹ thuật"
             # -------------------------------------------------------
             try:
-                # Khớp bất kỳ hàng nào có chứa "kỹ thuật" trong cột tên chương
-                KT_KEYWORDS = ['yêu cầu về kỹ thuật', 'yêu cầu kỹ thuật', 'chỉ dẫn kỹ thuật']
-                kt_rows = driver.find_elements(By.XPATH, "//tr")
-                target_rows = []
-                for r in kt_rows:
-                    row_text = driver.execute_script(
-                        "return (arguments[0].textContent || '').toLowerCase();", r
-                    )
-                    if any(kw in row_text for kw in KT_KEYWORDS):
-                        target_rows.append(r)
-
                 FILE_EXTS = (
                     '.pdf', '.doc', '.docx', '.xls', '.xlsx',
                     '.zip', '.rar', '.ppt', '.pptx', '.txt', '.odt',
                 )
+                KT_KEYWORDS = ['yêu cầu kỹ thuật', 'chỉ dẫn kỹ thuật', 'yêu cầu về kỹ thuật']
 
                 def get_text(el):
                     return driver.execute_script(
                         "return (arguments[0].textContent || '').trim().toLowerCase();", el
                     )
 
-                # Gom tất cả chip file từ các hàng phù hợp, dedup theo tên
-                seen_text = set()
-                chips = []
-                for row_el in target_rows:
-                    candidates = row_el.find_elements(By.XPATH, ".//a | .//span | .//button")
-                    for el in candidates:
-                        txt = get_text(el)
-                        if txt in seen_text:
+                def get_chips_from_row(row_el):
+                    """Trả về list chip file duy nhất trong 1 hàng."""
+                    seen = set()
+                    result = []
+                    for el in row_el.find_elements(By.XPATH, ".//a | .//span | .//button"):
+                        t = get_text(el)
+                        if t in seen:
                             continue
-                        if any(txt.endswith(ext) for ext in FILE_EXTS) or \
-                           any(ext in txt for ext in FILE_EXTS):
-                            seen_text.add(txt)
-                            chips.append(el)
+                        if any(t.endswith(ext) for ext in FILE_EXTS) or \
+                           any(ext in t for ext in FILE_EXTS):
+                            seen.add(t)
+                            result.append(el)
+                    return result
 
-                if not chips:
-                    print("   -> Không tìm thấy file KT.")
+                all_rows = driver.find_elements(By.XPATH, "//tr[td]")
+
+                # Tìm hàng Chương V (header)
+                cv_idx = None
+                cv_stt  = ""
+                for i, r in enumerate(all_rows):
+                    rt = get_text(r)
+                    if 'chương v' in rt or 'chuong v' in rt:
+                        tds = r.find_elements(By.TAG_NAME, "td")
+                        cv_stt = driver.execute_script(
+                            "return (arguments[0].textContent || '').trim();", tds[0]
+                        ) if tds else ""
+                        cv_idx = i
+                        break
+
+                chips = []
+                if cv_idx is None:
+                    print("   -> Không tìm thấy Chương V.")
                 else:
-                    names = [driver.execute_script(
-                        "return (arguments[0].textContent || '').trim();", c
-                    ) for c in chips]
-                    print(f"   -> Tìm thấy {len(chips)} file KT: {names}")
+                    # Hàng con = hàng có STT bắt đầu bằng cv_stt + "."
+                    # (vd: cv_stt="2.1" → con là "2.1.1", "2.1.2", ...)
+                    child_rows = [
+                        r for r in all_rows[cv_idx + 1:]
+                        if driver.execute_script(
+                            "var t=(arguments[0].querySelector('td')||{}).textContent||'';"
+                            "return t.trim();", r
+                        ).startswith(cv_stt + ".")
+                    ]
+
+                    if not child_rows:
+                        # Trường hợp A: không có đề mục con → lấy file từ hàng Chương V
+                        chips = get_chips_from_row(all_rows[cv_idx])
+                        if chips:
+                            print(f"   -> Chương V 1 đề mục, tải {len(chips)} file.")
+                        else:
+                            print("   -> Chương V không có file đính kèm.")
+                    else:
+                        # Trường hợp B: có đề mục con → chỉ lấy hàng khớp KT keywords
+                        for r in child_rows:
+                            rt = get_text(r)
+                            if any(kw in rt for kw in KT_KEYWORDS):
+                                chips.extend(get_chips_from_row(r))
+                        # Dedup toàn cục theo tên file
+                        seen_global = set()
+                        unique_chips = []
+                        for c in chips:
+                            t = get_text(c)
+                            if t not in seen_global:
+                                seen_global.add(t)
+                                unique_chips.append(c)
+                        chips = unique_chips
+                        if chips:
+                            names = [driver.execute_script(
+                                "return (arguments[0].textContent||'').trim();", c
+                            ) for c in chips]
+                            print(f"   -> Chương V nhiều đề mục, file KT: {names}")
+                        else:
+                            print("   -> Không tìm thấy file KT trong đề mục con.")
 
                 for i, chip in enumerate(chips):
-                    suffix = f"_{i + 1}" if len(chips) > 1 else ""
+                    suffix    = f"_{i + 1}" if len(chips) > 1 else ""
                     dest_name = f"yeu_cau_ky_thuat{suffix}"
                     chip_name = driver.execute_script(
                         "return (arguments[0].textContent || '').trim();", chip
