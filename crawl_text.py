@@ -176,9 +176,9 @@ def main_process():
             clear_temp()
             try:
                 tai_tat_ca = wait.until(EC.element_to_be_clickable((By.XPATH,
-                    "//a[contains(normalize-space(.), 'Tải tất cả')]"
+                    "//span[contains(@class,'tags-fileAttach')]"
+                    " | //a[contains(normalize-space(.), 'Tải tất cả')]"
                     " | //button[contains(normalize-space(.), 'Tải tất cả')]"
-                    " | //span[contains(normalize-space(.), 'Tải tất cả')]/.."
                 )))
                 js_click(driver, tai_tat_ca)
                 print("   -> Đã click Tải tất cả file đính kèm.")
