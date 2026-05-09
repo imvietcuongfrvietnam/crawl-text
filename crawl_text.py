@@ -354,21 +354,29 @@ def main_process():
                     try:
                         clear_temp()            # xoá temp trước khi click
                         js_click(driver, chip)
-                        # Đợi tối đa 5s để phát hiện tab viewer mới mở
-                        new_tab_opened = switch_to_new_tab(driver, main_window, timeout=5)
 
-                        if new_tab_opened:
-                            download_from_viewer(
-                                driver, wait, main_window, pkg_folder, dest_name
-                            )
-                        else:
-                            # Direct download — kiểm tra file đã bắt đầu tải chưa
-                            fname = wait_for_download(timeout=15)
-                            if fname:
-                                path = move_to_pkg(fname, pkg_folder, dest_name)
+                        # Kiểm tra đồng thời tab mới và file tải về —
+                        # cái nào xuất hiện trước thì xử lý, không chờ cố định
+                        handled = False
+                        for _ in range(30):          # poll mỗi 0.5s, tối đa 15s
+                            time.sleep(0.5)
+                            if len(driver.window_handles) > 1:
+                                switch_to_new_tab(driver, main_window)
+                                download_from_viewer(
+                                    driver, wait, main_window, pkg_folder, dest_name
+                                )
+                                handled = True
+                                break
+                            done = [f for f in os.listdir(TEMP_DL)
+                                    if not f.endswith('.crdownload')
+                                    and not f.endswith('.tmp')]
+                            if done:
+                                path = move_to_pkg(done[0], pkg_folder, dest_name)
                                 print(f"      · Lưu: {os.path.basename(path)}")
-                            else:
-                                print(f"      · Timeout tải file {i+1}.")
+                                handled = True
+                                break
+                        if not handled:
+                            print(f"      · Timeout tải file {i+1}.")
                     except Exception as e_chip:
                         print(f"      · Lỗi file {i+1}: {str(e_chip).split(chr(10))[0]}")
 
