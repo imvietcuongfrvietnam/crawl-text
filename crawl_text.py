@@ -1,229 +1,241 @@
 import os
 import time
+import shutil
 import pandas as pd
-import fitz  # PyMuPDF để xử lý PDF
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
+from selenium.common.exceptions import (
+    InvalidSessionIdException, WebDriverException, TimeoutException,
+)
 from webdriver_manager.chrome import ChromeDriverManager
 
 # ==========================================
-# CẤU HÌNH CƠ BẢN
+# CẤU HÌNH
 # ==========================================
-INPUT_FILE = 'raw.xlsx'
-DATA_FOLDER = os.path.join(os.getcwd(), 'data')
+INPUT_FILE  = 'raw.xlsx'
+INPUT_SHEET = '1. Raw data'
+BASE_DATA   = os.path.join(os.getcwd(), 'data')
+TEMP_DL     = os.path.join(os.getcwd(), '_temp_dl')
+TIMEOUT     = 5  # giây — áp dụng cho mọi thao tác chờ
 
-if not os.path.exists(DATA_FOLDER):
-    os.makedirs(DATA_FOLDER)
-
-# ==========================================
-# CẤU HÌNH CHROME
-# ==========================================
-chrome_options = Options()
-# Bỏ comment dòng dưới nếu muốn chạy ngầm:
-# chrome_options.add_argument('--headless')
-
-prefs = {
-    "download.default_directory": DATA_FOLDER,
-    "download.prompt_for_download": False,
-    "download.directory_upgrade": True,
-    "plugins.always_open_pdf_externally": True
-}
-chrome_options.add_experimental_option("prefs", prefs)
+for _d in (BASE_DATA, TEMP_DL):
+    os.makedirs(_d, exist_ok=True)
 
 # ==========================================
-# HÀM BÓC TÁCH PDF
+# CHROME
 # ==========================================
-def extract_pdf_text(pdf_path):
-    try:
-        text = ""
-        with fitz.open(pdf_path) as doc:
-            for page in doc:
-                text += page.get_text()
-        return text
-    except Exception as e:
-        return f"Lỗi bóc tách: {str(e)}"
+def make_chrome_options():
+    opt = Options()
+    # opt.add_argument('--headless')
+    opt.add_experimental_option("prefs", {
+        "download.default_directory": TEMP_DL,
+        "download.prompt_for_download": False,
+        "download.directory_upgrade": True,
+        "plugins.always_open_pdf_externally": True,
+        "profile.default_content_setting_values.automatic_downloads": 1,
+        "safebrowsing.enabled": False,
+        "safebrowsing.disable_download_protection": True,
+    })
+    opt.add_argument("--disable-features=DownloadBubble,DownloadBubbleV2")
+    opt.add_argument("--no-first-run")
+    opt.add_argument("--no-default-browser-check")
+    return opt
 
-
-def wait_for_download(folder, before_files, timeout=60):
-    """Đợi file tải xong và trả về tên file mới. None nếu timeout."""
-    for _ in range(timeout):
-        time.sleep(1)
-        after_files = set(os.listdir(folder))
-        new_files = list(after_files - before_files)
-        # Bỏ qua file .crdownload (đang tải dở)
-        completed = [f for f in new_files if not f.endswith('.crdownload')]
-        if completed:
-            return completed[0]
-    return None
-
+def make_driver():
+    svc = Service(ChromeDriverManager().install())
+    d = webdriver.Chrome(service=svc, options=make_chrome_options())
+    d.implicitly_wait(2)
+    return d
 
 # ==========================================
-# CHƯƠNG TRÌNH CHÍNH
+# HELPERS
+# ==========================================
+def clear_temp():
+    for f in os.listdir(TEMP_DL):
+        try:
+            os.remove(os.path.join(TEMP_DL, f))
+        except Exception:
+            pass
+
+def wait_for_downloads():
+    """Poll mỗi 0.5s, tối đa TIMEOUT giây. Trả về danh sách file đã tải xong."""
+    deadline = time.time() + TIMEOUT
+    while time.time() < deadline:
+        time.sleep(0.5)
+        done = [
+            f for f in os.listdir(TEMP_DL)
+            if not f.endswith('.crdownload') and not f.endswith('.tmp')
+        ]
+        if done:
+            # Đợi thêm 0.5s phòng có thêm file đang tải
+            time.sleep(0.5)
+            done = [
+                f for f in os.listdir(TEMP_DL)
+                if not f.endswith('.crdownload') and not f.endswith('.tmp')
+            ]
+            return done
+    return []
+
+def move_all_to_pkg(pkg_folder):
+    """Chuyển toàn bộ file trong TEMP_DL sang pkg_folder."""
+    moved = []
+    for f in os.listdir(TEMP_DL):
+        if f.endswith('.crdownload') or f.endswith('.tmp'):
+            continue
+        src = os.path.join(TEMP_DL, f)
+        dst = os.path.join(pkg_folder, f)
+        if os.path.exists(dst):
+            os.remove(dst)
+        shutil.move(src, dst)
+        moved.append(f)
+    return moved
+
+def js_click(driver, el):
+    driver.execute_script(
+        "arguments[0].scrollIntoView({block:'center'}); arguments[0].click();", el
+    )
+
+def close_extra_tabs(driver, main_window):
+    for h in list(driver.window_handles):
+        if h != main_window:
+            driver.switch_to.window(h)
+            driver.close()
+    driver.switch_to.window(main_window)
+
+# ==========================================
+# MAIN
 # ==========================================
 def main_process():
     print(f"Đang đọc file: {INPUT_FILE}...")
     try:
-        df = pd.read_excel(INPUT_FILE)
+        df = pd.read_excel(INPUT_FILE, sheet_name=INPUT_SHEET)
     except Exception as e:
         print(f"Lỗi đọc file: {e}")
         return
 
     df = df.drop_duplicates(subset=['Mã TBMT'], keep='first').reset_index(drop=True)
-    print(f"Số lượng bản ghi cần xử lý: {len(df)}")
+    print(f"Số bản ghi cần xử lý: {len(df)}")
 
-    print("Đang mở trình duyệt...")
-    service = Service(ChromeDriverManager().install())
-    driver = webdriver.Chrome(service=service, options=chrome_options)
-    wait = WebDriverWait(driver, 20)
-
-    content_list = []
+    driver = make_driver()
+    wait   = WebDriverWait(driver, TIMEOUT)
+    status_list = []
 
     for index, row in df.iterrows():
-        url = row['Link chi tiết']
+        url     = row['Link chi tiết']
         ma_tbmt = str(row['Mã TBMT']).strip()
-
-        print(f"\n[{index + 1}/{len(df)}] Đang xử lý: {ma_tbmt}")
+        print(f"\n[{index + 1}/{len(df)}] {ma_tbmt}")
 
         if pd.isna(url) or str(url).strip() == "":
             print("   -> Link trống, bỏ qua.")
-            content_list.append("Không có link")
+            status_list.append("Không có link")
             continue
 
+        pkg_folder = os.path.join(BASE_DATA, ma_tbmt)
+        os.makedirs(pkg_folder, exist_ok=True)
+
         try:
+            # Kiểm tra session còn sống không
+            try:
+                driver.current_url
+            except (InvalidSessionIdException, WebDriverException):
+                print("   !! Session died — khởi động lại trình duyệt...")
+                try:
+                    driver.quit()
+                except Exception:
+                    pass
+                driver = make_driver()
+                wait   = WebDriverWait(driver, TIMEOUT)
+
             driver.get(url)
             main_window = driver.current_window_handle
+            close_extra_tabs(driver, main_window)
 
-            # ----------------------------------------------------------
+            # --------------------------------------------------
             # BƯỚC 1: Click tab "Hồ sơ mời thầu"
-            # Dùng normalize-space(text()) thay vì contains(., ...) để
-            # tránh khớp với các element cha chứa text trong subtree.
-            # ----------------------------------------------------------
-            hsmtt_xpath = (
-                "//*["
-                "normalize-space(text())='Hồ sơ mời thầu'"
-                " and not(descendant::*[normalize-space(text())='Hồ sơ mời thầu'])"
-                "]"
-            )
-            hsmtt = wait.until(EC.element_to_be_clickable((By.XPATH, hsmtt_xpath)))
-            driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", hsmtt)
-            time.sleep(0.5)
-            driver.execute_script("arguments[0].click();", hsmtt)
-            time.sleep(2)
-
-            # ----------------------------------------------------------
-            # BƯỚC 2: Click "Biểu mẫu mời thầu" (dòng 1.5)
-            # Ưu tiên tìm trong hàng có STT "1.5" để tránh nhầm với
-            # header section khác.
-            # ----------------------------------------------------------
-            # Thử tìm trong table row chứa "1.5" trước
-            bmmtt_xpath = (
-                "//tr[td[normalize-space(text())='1.5']]"
-                "//*[normalize-space(text())='Biểu mẫu mời thầu']"
-                " | //tr[td[normalize-space(.)='1.5']]"
-                "//*[normalize-space(.)='Biểu mẫu mời thầu'"
-                " and not(descendant::*[normalize-space(.)='Biểu mẫu mời thầu'])]"
-            )
+            # --------------------------------------------------
             try:
-                bmmtt = wait.until(EC.element_to_be_clickable((By.XPATH, bmmtt_xpath)))
+                hsmt = wait.until(EC.element_to_be_clickable((By.XPATH,
+                    "//*[normalize-space(text())='Hồ sơ mời thầu'"
+                    " and not(descendant::*[normalize-space(text())='Hồ sơ mời thầu'])]"
+                )))
+                js_click(driver, hsmt)
+                time.sleep(1.5)
+                print("   -> Đã click Hồ sơ mời thầu.")
+            except TimeoutException:
+                print("   -> Timeout: không tìm thấy tab Hồ sơ mời thầu.")
+                status_list.append("Timeout: không tìm thấy tab HSMT")
+                continue
+
+            # --------------------------------------------------
+            # BƯỚC 2: Click "Tải tất cả file đính kèm"
+            # --------------------------------------------------
+            clear_temp()
+            try:
+                tai_tat_ca = wait.until(EC.element_to_be_clickable((By.XPATH,
+                    "//span[contains(@class,'tags-fileAttach')]"
+                    " | //a[contains(normalize-space(.), 'Tải tất cả')]"
+                    " | //button[contains(normalize-space(.), 'Tải tất cả')]"
+                )))
+                js_click(driver, tai_tat_ca)
+                print("   -> Đã click Tải tất cả file đính kèm.")
+            except TimeoutException:
+                print("   -> Timeout: không tìm thấy nút Tải tất cả.")
+                status_list.append("Timeout: không tìm thấy nút tải tất cả")
+                continue
+
+            # Đóng tab viewer nếu có mở (một số link mở viewer thay vì download trực tiếp)
+            time.sleep(1)
+            close_extra_tabs(driver, main_window)
+
+            # --------------------------------------------------
+            # BƯỚC 3: Đợi file tải xong rồi chuyển sang pkg_folder
+            # --------------------------------------------------
+            done = wait_for_downloads()
+            if not done:
+                print("   -> Timeout: không có file nào tải về.")
+                status_list.append("Timeout: không tải được file")
+                continue
+
+            moved = move_all_to_pkg(pkg_folder)
+            close_extra_tabs(driver, main_window)
+            print(f"   -> Lưu {len(moved)} file: {moved}")
+            status_list.append(f"OK: {len(moved)} file — {', '.join(moved)}")
+
+        except (InvalidSessionIdException, WebDriverException) as e:
+            err = str(e).split('\n')[0]
+            print(f"   !! Lỗi session: {err}")
+            status_list.append("Lỗi: session died")
+            try:
+                driver.quit()
             except Exception:
-                # Fallback: tìm text node trực tiếp (không phải trong element cha)
-                bmmtt_xpath = (
-                    "//*["
-                    "normalize-space(text())='Biểu mẫu mời thầu'"
-                    " and not(descendant::*[normalize-space(text())='Biểu mẫu mời thầu'])"
-                    "]"
-                )
-                bmmtt = wait.until(EC.element_to_be_clickable((By.XPATH, bmmtt_xpath)))
-
-            driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", bmmtt)
-            time.sleep(0.5)
-            driver.execute_script("arguments[0].click();", bmmtt)
-
-            # ----------------------------------------------------------
-            # BƯỚC 3: Đợi tab/cửa sổ mới mở ra (viewer)
-            # Trang viewer mở ở tab mới → phải switch sang tab đó
-            # ----------------------------------------------------------
-            time.sleep(3)
-            all_handles = driver.window_handles
-            if len(all_handles) > 1:
-                viewer_tab = [h for h in all_handles if h != main_window][0]
-                driver.switch_to.window(viewer_tab)
-                print("   -> Đã chuyển sang tab viewer.")
-            else:
-                print("   -> Viewer mở trong cùng tab.")
-
-            # ----------------------------------------------------------
-            # BƯỚC 4: Click nút "Tải về" trong viewer
-            # ----------------------------------------------------------
-            before_files = set(os.listdir(DATA_FOLDER))
-
-            btn_xpath = (
-                "//button[normalize-space(.)='Tải về']"
-                " | //a[normalize-space(.)='Tải về']"
-                " | //button[normalize-space(text())='Tải về']"
-                " | //a[normalize-space(text())='Tải về']"
-                " | //*[contains(@class,'download') and normalize-space(.)='Tải về']"
-                " | //span[normalize-space(text())='Tải về']/.."
-            )
-            btn_download = wait.until(EC.element_to_be_clickable((By.XPATH, btn_xpath)))
-            driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", btn_download)
-            time.sleep(0.5)
-            driver.execute_script("arguments[0].click();", btn_download)
-
-            # ----------------------------------------------------------
-            # BƯỚC 5: Đợi file tải xong, đổi tên, bóc tách PDF
-            # ----------------------------------------------------------
-            print("   -> Đang đợi tải file...")
-            downloaded_file = wait_for_download(DATA_FOLDER, before_files, timeout=60)
-
-            if downloaded_file:
-                old_path = os.path.join(DATA_FOLDER, downloaded_file)
-                extension = os.path.splitext(downloaded_file)[1]
-                new_path = os.path.join(DATA_FOLDER, f"{ma_tbmt}{extension}")
-
-                if os.path.exists(new_path):
-                    os.remove(new_path)
-                os.rename(old_path, new_path)
-                print(f"   -> Tải thành công: {ma_tbmt}{extension}")
-
-                if extension.lower() == '.pdf':
-                    pdf_text = extract_pdf_text(new_path)
-                    content_list.append(pdf_text)
-                    print("   -> Đã bóc tách nội dung PDF.")
-                else:
-                    content_list.append(f"File không phải PDF (Đuôi: {extension})")
-            else:
-                print("   -> Lỗi: Tải file quá lâu.")
-                content_list.append("Lỗi tải file (Timeout)")
-
-            # Đóng tab viewer, quay về tab chính
-            if len(driver.window_handles) > 1:
-                driver.close()
-                driver.switch_to.window(main_window)
+                pass
+            driver = make_driver()
+            wait   = WebDriverWait(driver, TIMEOUT)
 
         except Exception as e:
-            err_msg = str(e).split('\n')[0]
-            print(f"   -> Lỗi thao tác: {err_msg}")
-            content_list.append(f"Lỗi: {err_msg}")
-            # Đảm bảo luôn quay về tab chính nếu có lỗi
+            err = str(e).split('\n')[0]
+            print(f"   -> Lỗi: {err}")
+            status_list.append(f"Lỗi: {err[:120]}")
             try:
-                if driver.current_window_handle != main_window:
-                    driver.close()
-                    driver.switch_to.window(main_window)
+                close_extra_tabs(driver, driver.current_window_handle)
             except Exception:
                 pass
 
-    driver.quit()
+    try:
+        driver.quit()
+    except Exception:
+        pass
 
-    df['content'] = content_list
+    df['status'] = status_list
     output_file = 'ket_qua_cuoi_cung.xlsx'
     df.to_excel(output_file, index=False)
     print(f"\n======================================")
-    print(f"Xong! Dữ liệu đã lưu tại: {output_file}")
+    print(f"Xong! Kết quả: {output_file}")
+    print(f"File tải về: data/{{ma_tbmt}}/")
     print(f"======================================")
 
 
