@@ -282,43 +282,64 @@ def main_process():
 
             # -------------------------------------------------------
             # BƯỚC 4: Tải tài liệu Yêu cầu kỹ thuật (row 2.1)
-            # File đính kèm trong row chứa "2.1" — click chip/badge
+            # Row 2.1 có thể có nhiều file với nhiều định dạng khác nhau
+            # (pdf, docx, xlsx, ...) → tải tất cả
             # -------------------------------------------------------
             try:
-                # Tìm file attachment (chip/badge/link) trong row 2.1
-                # Không lấy text chương mà lấy phần tử con là file
-                ky_thuat_xpath = (
-                    # Ưu tiên: link/span có đuôi file trong row 2.1
-                    "//tr[td[normalize-space(text())='2.1']]//a[normalize-space(.)!='']"
-                    " | //tr[td[normalize-space(text())='2.1']]"
-                    "//span[contains(@class,'file') or contains(@class,'attach') "
-                    "       or contains(@class,'chip') or contains(@class,'tag')]"
-                    " | //tr[td[normalize-space(text())='2.1']]"
-                    "//span[contains(normalize-space(.),'pdf') "
-                    "       or contains(normalize-space(.),'doc') "
-                    "       or contains(normalize-space(.),'xls')]"
+                # Dùng normalize-space(.) thay vì text() để khớp kể cả
+                # khi STT nằm trong thẻ con <span> bên trong <td>
+                row_xpath = "//tr[td[normalize-space(.)='2.1']]"
+                row_el = WebDriverWait(driver, 10).until(
+                    EC.presence_of_element_located((By.XPATH, row_xpath))
                 )
-                ky_thuat_el = wait.until(EC.element_to_be_clickable((By.XPATH, ky_thuat_xpath)))
-                js_click(driver, ky_thuat_el)
-                print("   -> Đã click file Yêu cầu kỹ thuật, đợi download...")
 
-                time.sleep(1)
-                # Kiểm tra có mở tab mới không
-                if len(driver.window_handles) > 1:
-                    # Mở viewer → xử lý như bước 2
-                    switch_to_new_tab(driver, main_window)
-                    kt_path = download_from_viewer(
-                        driver, wait, main_window, pkg_folder, "yeu_cau_ky_thuat"
-                    )
+                # Lấy tất cả phần tử con có thể click được (a, span, button)
+                candidates = row_el.find_elements(By.XPATH, ".//a | .//span | .//button")
+
+                # Lọc bằng Python: chỉ giữ những phần tử có text trông như tên file
+                FILE_EXTS = (
+                    '.pdf', '.doc', '.docx', '.xls', '.xlsx',
+                    '.zip', '.rar', '.ppt', '.pptx', '.txt', '.odt',
+                )
+                chips = [
+                    el for el in candidates
+                    if any(el.text.strip().lower().endswith(ext) for ext in FILE_EXTS)
+                    or any(ext in el.text.strip().lower() for ext in FILE_EXTS)
+                ]
+
+                if not chips:
+                    print("   -> Không tìm thấy file đính kèm trong row 2.1.")
                 else:
-                    # Download trực tiếp
-                    clear_temp()
-                    fname = wait_for_download(timeout=90)
-                    if fname:
-                        kt_path = move_to_pkg(fname, pkg_folder, "yeu_cau_ky_thuat")
-                        print(f"   -> Lưu: {os.path.basename(kt_path)}")
-                    else:
-                        print("   -> Timeout tải Yêu cầu kỹ thuật.")
+                    names = [c.text.strip() for c in chips]
+                    print(f"   -> Tìm thấy {len(chips)} file KT: {names}")
+
+                for i, chip in enumerate(chips):
+                    suffix = f"_{i + 1}" if len(chips) > 1 else ""
+                    dest_name = f"yeu_cau_ky_thuat{suffix}"
+                    print(f"   -> [{i+1}/{len(chips)}] Tải: {chip.text.strip()}")
+                    try:
+                        clear_temp()            # xoá temp trước khi click
+                        js_click(driver, chip)
+                        time.sleep(1.5)         # đợi để biết có mở tab mới không
+
+                        if len(driver.window_handles) > 1:
+                            switch_to_new_tab(driver, main_window)
+                            download_from_viewer(
+                                driver, wait, main_window, pkg_folder, dest_name
+                            )
+                        else:
+                            # Download trực tiếp (không qua viewer)
+                            fname = wait_for_download(timeout=90)
+                            if fname:
+                                path = move_to_pkg(fname, pkg_folder, dest_name)
+                                print(f"      · Lưu: {os.path.basename(path)}")
+                            else:
+                                print(f"      · Timeout tải file {i+1}.")
+                    except Exception as e_chip:
+                        print(f"      · Lỗi file {i+1}: {str(e_chip).split(chr(10))[0]}")
+
+                    close_extra_tabs(driver, main_window)
+
             except Exception as e:
                 print(f"   -> Lỗi Yêu cầu kỹ thuật: {str(e).split(chr(10))[0]}")
 
